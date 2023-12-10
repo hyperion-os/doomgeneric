@@ -5,9 +5,7 @@
 
 use core::{ffi, ptr};
 
-use libstd::println;
-
-use libc::*;
+use self::libc::{_atoi_test, _strncasecmp_test, _strncmp_test};
 
 //
 
@@ -34,7 +32,7 @@ extern "C" fn DG_DrawFrame() {
 }
 
 #[no_mangle]
-extern "C" fn DG_SleepMs(ms: u32) {
+extern "C" fn DG_SleepMs(_ms: u32) {
     unimplemented!()
 }
 
@@ -44,18 +42,22 @@ extern "C" fn DG_GetTicksMs() -> u32 {
 }
 
 #[no_mangle]
-extern "C" fn DG_GetKey(_pressed: *mut ffi::c_int, _doomKey: *mut ffi::c_uchar) -> ffi::c_int {
+extern "C" fn DG_GetKey(_pressed: *mut ffi::c_int, _doom_key: *mut ffi::c_uchar) -> ffi::c_int {
     unimplemented!()
 }
 
 #[no_mangle]
-extern "C" fn DG_SetWindowTitle(title: *const ffi::c_char) {
+extern "C" fn DG_SetWindowTitle(_title: *const ffi::c_char) {
     unimplemented!()
 }
 
 //
 
 fn main() {
+    _strncmp_test();
+    _strncasecmp_test();
+    _atoi_test();
+
     // println!("doomgeneric_Create");
 
     unsafe {

@@ -95,9 +95,9 @@ fn main() {
         .extra_warnings(false)
         .flag("-w") // TODO: fix the warnings in doomgeneric
         .flag("-nostdlib")
-        .flag("-nolibc")
-        .flag("-ffreestanding")
-        .flag("-fomit-frame-pointer")
+        // .flag("-nolibc")
+        // .flag("-ffreestanding")
+        // .flag("-fomit-frame-pointer")
         // .flag("-O0")
         .include("./include")
         .compile("doomgeneric");

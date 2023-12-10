@@ -36,9 +36,7 @@
             cargo-nextest
             cargo-expand
             cargo-make
-            act
-            lld_16
-            clang_16
+            coreboot-toolchain.x64
           ];
         };
       }

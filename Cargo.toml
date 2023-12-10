@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 libstd.path = "../hyperion/crates/libstd"
 printf-compat = { version = "0.1", default-features = false }
+libm = "0.2"
 
 [build-dependencies]
 # cc = { version = "1", features = ["parallel"] }
