@@ -6,3 +6,8 @@
 .vs/
 Debug/
 Release/
+
+# Added by cargo
+
+/target
+/.direnv
