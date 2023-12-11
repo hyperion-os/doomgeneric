@@ -6,44 +6,61 @@ use core::{
     str::from_utf8,
 };
 
-use alloc::format;
+use alloc::{borrow::Cow, boxed::Box, format};
 use libstd::{
     eprintln,
-    fs::{Dir, File, OpenOptions, STDOUT},
+    fs::{Dir, File, OpenOptions, Stderr, STDOUT},
+    io::{Read, Write},
     print, println,
-    sys::{err::Error, fs::FileDesc},
+    process::ExitCode,
+    sync::Mutex,
+    sys::err::Error,
 };
 use printf_compat::output;
 
 //
 
+#[derive(Debug)]
+pub struct CFile {
+    file: Mutex<File>,
+    path: Cow<'static, str>,
+}
+
+//
+
 #[no_mangle]
-pub extern "C" fn fopen(filename: *const c_char, mode: *const c_char) -> *mut c_void {
-    let Some(path) = as_rust_str(filename) else {
+pub unsafe extern "C" fn fopen(filename: *const c_char, mode: *const c_char) -> *mut CFile {
+    let Some(path) = (unsafe { as_rust_str(filename) }) else {
         eprintln!("fopen invalid path");
         return null_mut();
     };
-    let Some(mode) = as_rust_str(mode) else {
+    let Some(mode) = (unsafe { as_rust_str(mode) }) else {
         eprintln!("fopen invalid mode");
         return null_mut();
     };
 
     let path = format!("/{path}");
+    // eprintln!("open file {path} as {mode}");
 
     let mut opts = OpenOptions::new();
-    if mode.contains('r') {
-        opts.read(true);
-    }
     if mode.contains('w') {
         opts.write(true);
         opts.create(true);
+        // opts.append(false);
+        opts.truncate(true);
+    }
+    if mode.contains('r') {
+        opts.read(true);
     }
     if mode.contains('x') {
         opts.create_new(true);
     }
 
-    match File::open(&path) {
-        Ok(f) => unsafe { f.into_inner() }.0 as _,
+    match opts.open(&path) {
+        Ok(f) => Box::into_raw(Box::new(CFile {
+            file: Mutex::new(f),
+            path: path.into(),
+        })),
         Err(err) => {
             eprintln!("fopen syscall error ({path}): {err}");
             match err {
@@ -64,13 +81,14 @@ pub extern "C" fn fopen(filename: *const c_char, mode: *const c_char) -> *mut c_
 }
 
 #[no_mangle]
-pub extern "C" fn ftell(stream: *const c_void) -> c_long {
-    eprintln!("ftell syscall");
+pub extern "C" fn ftell(stream: *const CFile) -> c_long {
+    let file = unsafe { &*stream };
 
-    let file = unsafe { File::new(FileDesc(stream as usize)) };
-
-    let res = match file.metadata() {
-        Ok(meta) => meta,
+    match file.file.lock().metadata() {
+        Ok(meta) => {
+            eprintln!("ftell syscall {:?} ({})", file.path, meta.position);
+            meta.position as _
+        }
         Err(err) => {
             match err {
                 _ => {
@@ -78,33 +96,30 @@ pub extern "C" fn ftell(stream: *const c_void) -> c_long {
                 }
             };
             unsafe { errno = err.0 as _ };
-            return -1;
+            -1
         }
-    };
-
-    unsafe { file.into_inner() };
-
-    res.position as _
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn fflush(_stream: *const c_void) -> c_int {
+pub extern "C" fn fflush(_stream: *const CFile) -> c_int {
     // files are not buffered by default
     0
 }
 
 #[no_mangle]
-pub extern "C" fn fseek(stream: *const c_void, offset: c_long, origin: c_int) -> c_int {
-    // eprintln!("fseek syscall");
+pub extern "C" fn fseek(stream: *const CFile, offset: c_long, origin: c_int) -> c_int {
+    let file = unsafe { &*stream };
+    // eprintln!("fseek syscall {:?} ({offset}, {origin})", file.path);
 
-    if let Err(err) = libstd::sys::seek(FileDesc(stream as usize), offset as _, origin as _) {
+    if let Err(err) = libstd::sys::seek(file.file.lock().as_desc(), offset as _, origin as _) {
         match err {
             _ => {
                 eprintln!("FIXME: fseek map error {} {offset} {origin}", err.as_str());
             }
         };
         unsafe { errno = err.0 as _ };
-        -1
+        1
     } else {
         0
     }
@@ -115,20 +130,45 @@ pub extern "C" fn fread(
     ptr: *mut c_void,
     size: c_size_t,
     count: c_size_t,
-    stream: *const c_void,
+    stream: *const CFile,
 ) -> c_size_t {
     if size == 0 || count == 0 {
         return 0;
     }
 
-    // eprintln!("fread syscall");
+    let file = unsafe { &*stream };
+    // eprintln!("fread syscall {:?} ({} bytes)", file.path, size * count);
 
     let buf = unsafe { slice::from_raw_parts_mut(ptr as *mut u8, size * count) };
+    let mut file = file.file.lock();
 
-    let file = unsafe { File::new(FileDesc(stream as usize)) };
+    // let mut i = 0usize;
+    // while !buf.is_empty() {
+    //     match file.read(buf) {
+    //         Ok(n) => {
+    //             let tmp = buf;
+    //             buf = &mut tmp[n..];
+    //             i += n;
+    //         }
+    //         Err(Error::INTERRUPTED) => {}
+    //         // Err(Error::UNEXPECTED_EOF) => {
+    //         //     break;
+    //         // }
+    //         Err(err) => {
+    //             match err {
+    //                 _ => {
+    //                     eprintln!("FIXME: fread map error {}", err.as_str());
+    //                 }
+    //             };
+    //             unsafe { errno = err.0 as _ };
+    //             break;
+    //         }
+    //     }
+    // }
 
-    let read = match file.read(buf) {
-        Ok(read) => read,
+    let mut bytes_read = 0;
+    match file.read_exact(buf, &mut bytes_read) {
+        Ok(()) => {}
         Err(err) => {
             match err {
                 _ => {
@@ -136,13 +176,15 @@ pub extern "C" fn fread(
                 }
             };
             unsafe { errno = err.0 as _ };
-            0
         }
-    };
+    }
 
-    unsafe { file.into_inner() };
+    // match from_utf8(&buf) {
+    //     Ok(s) => eprintln!("`{s}`"),
+    //     Err(e) => eprintln!("{}", from_utf8(&buf[..e.valid_up_to()]).unwrap()),
+    // };
 
-    read / size
+    bytes_read / size
 }
 
 #[no_mangle]
@@ -150,20 +192,20 @@ pub extern "C" fn fwrite(
     ptr: *const c_void,
     size: c_size_t,
     count: c_size_t,
-    stream: *const c_void,
+    stream: *const CFile,
 ) -> c_size_t {
     if size == 0 || count == 0 {
         return 0;
     }
 
-    eprintln!("fwrite syscall");
+    let file = unsafe { &*stream };
+    // eprintln!("fwrite syscall {:?}", file.path);
 
     let buf = unsafe { slice::from_raw_parts(ptr as *const u8, size * count) };
 
-    let file = unsafe { File::new(FileDesc(stream as usize)) };
-
-    let written = match file.write(buf) {
-        Ok(n) => n,
+    let mut bytes_written = 0;
+    match file.file.lock().write_exact(buf, &mut bytes_written) {
+        Ok(()) => {}
         Err(err) => {
             match err {
                 _ => {
@@ -171,24 +213,31 @@ pub extern "C" fn fwrite(
                 }
             };
             unsafe { errno = err.0 as _ };
-            0
         }
-    };
+    }
 
-    unsafe { file.into_inner() };
-
-    written as _
+    bytes_written / size
 }
 
 #[no_mangle]
-pub extern "C" fn fclose(stream: *const c_void) -> c_int {
-    unsafe { File::new(FileDesc(stream as usize)) };
+pub unsafe extern "C" fn fclose(stream: *mut CFile) -> c_int {
+    let file = unsafe { &*stream };
+    // eprintln!("fclose syscall {:?}", file.path);
+
+    if stream as usize == stderr.0 as usize {
+        file.file.lock().close().unwrap();
+        return 0;
+    }
+
+    let file = unsafe { Box::from_raw(stream) }; // drop the File
+    drop(file);
+
     0
 }
 
 #[no_mangle]
-pub extern "C" fn mkdir(path: *const c_char, _mode: u32) -> c_int {
-    let Some(path) = as_rust_str(path) else {
+pub unsafe extern "C" fn mkdir(path: *const c_char, _mode: u32) -> c_int {
+    let Some(path) = (unsafe { as_rust_str(path) }) else {
         eprintln!("mkdir invalid path");
         return -1;
     };
@@ -207,12 +256,20 @@ pub extern "C" fn mkdir(path: *const c_char, _mode: u32) -> c_int {
 }
 
 #[no_mangle]
-unsafe extern "C" fn fprintf(stream: *const c_void, format: *const c_char, mut args: ...) -> c_int {
+pub unsafe extern "C" fn fputc(ch: c_int, stream: *const CFile) -> c_int {
+    let file = unsafe { &*stream };
+    let mut file = file.file.lock();
+    file.write(&[ch as c_char as u8]).unwrap();
+    1
+}
+
+#[no_mangle]
+unsafe extern "C" fn fprintf(stream: *const CFile, format: *const c_char, mut args: ...) -> c_int {
     vfprintf(stream, format, &mut *args.as_va_list())
 }
 
 #[no_mangle]
-pub extern "C" fn putc(_character: c_int, _stream: *const c_void) -> c_int {
+pub unsafe extern "C" fn putc(_character: c_int, _stream: *const CFile) -> c_int {
     unimplemented!()
 }
 
@@ -222,44 +279,28 @@ pub extern "C" fn remove() {
 }
 
 #[no_mangle]
-pub extern "C" fn system(cmd: *const c_char) -> c_int {
-    let Some(cmd) = as_rust_str(cmd) else {
+pub unsafe extern "C" fn system(cmd: *const c_char) -> c_int {
+    let Some(cmd) = (unsafe { as_rust_str(cmd) }) else {
         return 1;
     };
 
     // print zenity msg to console
-    eprintln!("run cmd {cmd}");
+    println!("exec `{cmd}`");
 
     0
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn vfprintf(
-    stream: *const c_void,
+    stream: *const CFile,
     format: *const c_char,
     // mut args: ...
     args: &mut VaListImpl,
 ) -> c_int {
-    let mut file = unsafe { File::new(FileDesc(stream as usize)) };
+    let file = unsafe { &*stream };
+    let mut file = file.file.lock();
 
-    struct Dbg(File);
-
-    impl fmt::Write for Dbg {
-        fn write_str(&mut self, s: &str) -> fmt::Result {
-            eprintln!("vfprintf: {s}");
-            self.0.write_str(s)
-        }
-    }
-
-    let mut f = Dbg(file);
-
-    let res = printf_compat::format(format, args.as_va_list(), output::fmt_write(&mut f));
-
-    file = f.0;
-
-    unsafe { file.into_inner() };
-
-    res
+    printf_compat::format(format, args.as_va_list(), output::fmt_write(&mut *file))
 }
 
 #[no_mangle]
@@ -287,11 +328,11 @@ unsafe extern "C" fn vsnprintf(
         at: usize,
     }
 
-    buffer.fill(0);
+    // buffer.fill(0);
 
     impl<'a> fmt::Write for BufferWrite<'a> {
         fn write_str(&mut self, s: &str) -> fmt::Result {
-            eprintln!("vsnprintf: {s}");
+            // eprintln!("vsnprintf: {s}");
 
             let now = self.at;
             self.at += s.len();
@@ -322,15 +363,11 @@ unsafe extern "C" fn vsnprintf(
     // };
     // println!("{:?}", from_utf8(&test));
 
-    let res = unsafe {
-        printf_compat::format(
-            format,
-            args.as_va_list(),
-            output::fmt_write(&mut BufferWrite { buf: buffer, at: 0 }),
-        )
-    };
+    let mut buf = BufferWrite { buf: buffer, at: 0 };
+    let res =
+        unsafe { printf_compat::format(format, args.as_va_list(), output::fmt_write(&mut buf)) };
 
-    assert!(*buffer.last().unwrap() == 0);
+    buffer[buf.at.min(buffer.len() - 1)] = 0;
 
     res
 }
@@ -346,11 +383,12 @@ pub extern "C" fn realloc(ptr: *mut c_void, size: c_size_t) -> *mut c_void {
         let new_slice = unsafe { slice::from_raw_parts_mut(new as *mut u8, size) };
         new_slice[..min].copy_from_slice(&old_slice[..min]);
 
-        eprintln!("realloc old_size:{old_size} size:{size}");
+        eprintln!("realloc old: {old_slice:?} new: {new_slice:?}");
+
+        unsafe { free(ptr) };
 
         new
     } else {
-        eprintln!("realloc nullptr");
         malloc(size)
     }
 }
@@ -449,8 +487,8 @@ pub extern "C" fn putchar(character: c_int) -> c_int {
 }
 
 #[no_mangle]
-pub extern "C" fn exit() {
-    unimplemented!()
+pub extern "C" fn exit(status: c_int) -> ! {
+    ExitCode::from_i32(status).exit_process()
 }
 
 #[no_mangle]
@@ -650,30 +688,20 @@ pub fn _atoi_test() {
 }
 
 #[no_mangle]
-pub extern "C" fn strncpy(
-    mut dst: *mut c_char,
-    mut src: *const c_char,
+pub unsafe extern "C" fn strncpy(
+    dst: *mut c_char,
+    src: *const c_char,
     num: c_size_t,
 ) -> *mut c_char {
-    let mut end = false;
+    let mut i = 0;
 
-    for _ in 0..num {
-        if unsafe { *src } == 0 {
-            end = true;
-        }
+    while unsafe { *src.add(i) } != 0 && i < num {
+        unsafe { *dst.add(i) = *src.add(i) };
+        i += 1;
+    }
 
-        if end {
-            unsafe {
-                *dst = 0;
-            }
-        } else {
-            unsafe {
-                *dst = *src;
-            }
-        }
-
-        dst = unsafe { dst.add(1) };
-        src = unsafe { src.add(1) };
+    for i in i..num {
+        unsafe { *dst.add(i) = 0 };
     }
 
     dst
@@ -712,15 +740,67 @@ pub extern "C" fn toupper(c: c_int) -> c_int {
 }
 
 #[no_mangle]
-pub extern "C" fn strdup(src: *const c_char) -> *mut c_char {
-    let len = strlen(src);
+pub unsafe extern "C" fn strdup(src: *const c_char) -> *mut c_char {
+    unsafe { strndup(src, usize::MAX) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn strndup(src: *const c_char, size: c_size_t) -> *mut c_char {
+    let len = strnlen(src, size);
 
     let dst = malloc(len + 1) as *mut c_char;
-    strncpy(dst, src, len);
+    if dst.is_null() {
+        todo!("OOM");
+    }
 
-    assert_eq!(unsafe { *dst.byte_add(len) }, 0);
+    // there could be null bytes in the middle so strncpy doesnt work, idk
+    for i in 0..len {
+        unsafe { *dst.add(i) = *src.add(i) };
+    }
+    unsafe { *dst.add(len) = 0 };
 
     dst
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn strlen(str: *const c_char) -> c_size_t {
+    unsafe { strnlen(str, usize::MAX) }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn strnlen(str: *const c_char, size: c_size_t) -> c_size_t {
+    c_str_iter(str).take(size).take_while(|&c| c != 0).count()
+}
+
+fn _strlen_assert(lhs: &str, expected: usize) {
+    let val = unsafe { strlen(lhs.as_ptr() as *const c_char) };
+    assert_eq!(
+        val, expected,
+        "strlen({lhs}) => {val}, expected: {expected}"
+    );
+}
+
+fn _strnlen_assert(lhs: &str, n: usize, expected: usize) {
+    let val = unsafe { strnlen(lhs.as_ptr() as *const c_char, n) };
+    assert_eq!(
+        val, expected,
+        "strnlen({lhs}, {n}) => {val}, expected: {expected}"
+    );
+}
+
+pub fn _strlen_test() {
+    _strlen_assert("\0", 0);
+    _strlen_assert("  \0", 2);
+    _strlen_assert("  1\0", 3);
+    _strlen_assert("  1  \0", 5);
+    _strlen_assert("  654  \0", 7);
+    _strlen_assert(" 3d\0", 3);
+    _strlen_assert(" 3d\0", 3);
+
+    _strnlen_assert("  654  ", 7, 7);
+    _strnlen_assert("  654  ", 4, 4);
+    _strnlen_assert("  654  ", 0, 0);
+    _strnlen_assert("  \054  ", 7, 2);
 }
 
 //
@@ -731,20 +811,25 @@ static mut errno: i32 = 0;
 
 #[no_mangle]
 #[used]
-static mut stderr: usize = 0;
+static stderr: StaticCFile = {
+    static STDERR_F: CFile = CFile {
+        file: Mutex::new(unsafe { File::new(Stderr::FD) }),
+        path: Cow::Borrowed("<stderr>"),
+    };
+
+    StaticCFile(&STDERR_F as _)
+};
+
+#[repr(transparent)]
+struct StaticCFile(*const CFile);
+
+unsafe impl Sync for StaticCFile {}
 
 //
 
-fn strlen(str: *const c_char) -> usize {
-    extern "C" {
-        fn strlen(str: *const c_char) -> c_size_t;
-    }
-    unsafe { strlen(str) }
-}
-
 #[track_caller]
-fn as_rust_str<'a>(str: *const c_char) -> Option<&'a str> {
-    let len = strlen(str);
+pub unsafe fn as_rust_str<'a>(str: *const c_char) -> Option<&'a str> {
+    let len = unsafe { strlen(str) };
 
     let str = unsafe { slice::from_raw_parts(str as *const u8, len) };
     match from_utf8(str) {
