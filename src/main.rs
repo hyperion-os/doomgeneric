@@ -6,6 +6,7 @@
 use core::{ffi, mem, ptr, slice};
 
 use alloc::string::String;
+use crossbeam::queue::SegQueue;
 use hyperion_color::Color;
 use libstd::{
     eprintln,
@@ -47,8 +48,7 @@ struct Ev {
     pressed: i32,
 }
 
-static KEYS_SEND: Mutex<Option<ringbuf::HeapProducer<Ev>>> = Mutex::new(None);
-static KEYS_RECV: Mutex<Option<ringbuf::HeapConsumer<Ev>>> = Mutex::new(None);
+static KEYS: SegQueue<Ev> = SegQueue::new();
 
 //
 
@@ -143,14 +143,7 @@ extern "C" fn DG_Init() {
                 _ => continue,
             };
 
-            if let Err(err) = KEYS_SEND
-                .lock()
-                .as_mut()
-                .expect("input ringbuffer should be already set up")
-                .push(Ev { key, pressed })
-            {
-                eprintln!("input queue full, dropping {err:?}");
-            }
+            KEYS.push(Ev { key, pressed });
         }
     });
 
@@ -180,8 +173,6 @@ extern "C" fn DG_Init() {
 
 #[no_mangle]
 extern "C" fn DG_DrawFrame() {
-    // eprintln!("DG_DrawFrame");
-    // unimplemented!();
     let mut fb = FB.lock();
 
     const DOOMGENERIC_RESX: usize = 640;
@@ -226,7 +217,7 @@ extern "C" fn DG_GetTicksMs() -> u32 {
 
 #[no_mangle]
 extern "C" fn DG_GetKey(_pressed: *mut ffi::c_int, _doom_key: *mut ffi::c_uchar) -> ffi::c_int {
-    if let Some(Ev { key, pressed }) = KEYS_RECV.lock().as_mut().unwrap().pop() {
+    if let Some(Ev { key, pressed }) = KEYS.pop() {
         if pressed == 1 {
             eprintln!("{key} up");
         } else {
@@ -298,11 +289,6 @@ impl Framebuffer<'_> {
 //
 
 fn main() {
-    let (send, recv) = ringbuf::HeapRb::new(256).split();
-
-    *KEYS_SEND.lock() = Some(send);
-    *KEYS_RECV.lock() = Some(recv);
-
     _strncmp_test();
     _strncasecmp_test();
     _atoi_test();
