@@ -10,6 +10,8 @@ libstd.path = "../hyperion/crates/libstd"
 printf-compat = { version = "0.1", default-features = false }
 libm = "0.2"
 hyperion-color.path = "../hyperion/crates/color"
+
+crossbeam = { version = "0.8", default-features = false, features = ["alloc"] }
 ringbuf = { version = "0.3", default-features = false, features = ["alloc"] }
 
 serde = { version = "1.0", default-features = false, features = ["derive"] }

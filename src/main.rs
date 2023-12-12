@@ -10,12 +10,11 @@ use hyperion_color::Color;
 use libstd::{
     eprintln,
     fs::{File, OpenOptions, Stdin},
-    io::{BufReader, Read},
+    io::BufReader,
     sync::Mutex,
-    sys::{fs::FileDesc, map_file, nanosleep, rename, timestamp, unmap_file, yield_now},
+    sys::{map_file, nanosleep, rename, timestamp, yield_now},
     thread::spawn,
 };
-use ringbuf::Rb;
 
 use self::libc::{_atoi_test, _strlen_test, _strncasecmp_test, _strncmp_test};
 
@@ -42,25 +41,21 @@ static FB: Mutex<Framebuffer> = Mutex::new(Framebuffer {
     buf: &mut [],
 });
 
+#[derive(Debug)]
 struct Ev {
     key: u8,
     pressed: i32,
 }
 
-static RB: Mutex<Option<ringbuf::HeapRb<Ev>>> = Mutex::new(None);
+static KEYS_SEND: Mutex<Option<ringbuf::HeapProducer<Ev>>> = Mutex::new(None);
+static KEYS_RECV: Mutex<Option<ringbuf::HeapConsumer<Ev>>> = Mutex::new(None);
 
 //
 
 #[no_mangle]
 extern "C" fn DG_Init() {
-    RB.lock().get_or_insert_with(|| ringbuf::HeapRb::new(256));
-
     spawn(|| {
         let mut stdin = BufReader::new(unsafe { File::new(Stdin::FD) });
-
-        let mut key = [0u8; 40];
-
-        eprintln!("READING STDIN FOR KEYS");
         let mut buf = String::new();
         while stdin.read_line(&mut buf).is_ok() {
             #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -71,22 +66,20 @@ extern "C" fn DG_Init() {
                 unicode: Option<char>,
             }
 
-            // eprintln!("GOT RAW `{}`", buf.trim());
             let Ok(ev) = serde_json::from_str::<KeyboardEventSer>(&buf.trim()) else {
                 continue;
             };
             buf.clear();
-            eprintln!("GOT {ev:?}");
 
             let pressed = if ev.state == 0 { 1 } else { 0 };
 
             let key = match ev.keycode {
-                103 => 0xae, // right
-                101 => 0xac, // left
-                88 => 0xad,  // up
-                102 => 0xaf, // down
-                // #define KEY_STRAFE_L	0xa0
-                // #define KEY_STRAFE_R	0xa1
+                103 => 0xae,      // right
+                101 => 0xac,      // left
+                88 => 0xad,       // up
+                102 => 0xaf,      // down
+                84 => 0xa0,       // comma - strafe left
+                85 => 0xa1,       // period - strafe right
                 96 => 0xa2,       // space - use
                 93 => 0xa3,       // lctrl - fire
                 0 => 27,          // escape
@@ -111,50 +104,54 @@ extern "C" fn DG_Init() {
                 29 => 0x3d, // equals
                 28 => 0x2d, // minus
 
-                // (0x80+0x36) rshift, idk, mine doesnt work
+                // => 0x80+0x36, // rshift, idk, mine doesnt work
                 100 => 0x80 + 0x1d,     // rctrl
                 95 | 97 => 0x80 + 0x38, // r/l alt
 
-                // #define KEY_CAPSLOCK    (0x80+0x3a)
-                // #define KEY_NUMLOCK     (0x80+0x45)
-                // #define KEY_SCRLCK      (0x80+0x46)
-                // #define KEY_PRTSCR      (0x80+0x59)
+                60 => 0x80 + 0x3a, // capslock
+                // => 0x80+0x45, // numlock
+                // => 0x80+0x46, // scrlock
+                // => 0x80+0x59, // prtint screen
 
-                // #define KEY_HOME        (0x80+0x47)
-                // #define KEY_END         (0x80+0x4f)
-                // #define KEY_PGUP        (0x80+0x49)
-                // #define KEY_PGDN        (0x80+0x51)
-                // #define KEY_INS         (0x80+0x52)
-                // #define KEY_DEL         (0x80+0x53)
+                //
+                32 => 0x80 + 0x47, // home
+                54 => 0x80 + 0x4f, // end
+                33 => 0x80 + 0x49, // pg down
+                55 => 0x80 + 0x51, // pg up
+                // => 0x80+0x52, // insert
+                53 => 0x80 + 0x53, // delete
 
-                // #define KEYP_0          0
-                // #define KEYP_1          KEY_END
-                // #define KEYP_2          KEY_DOWNARROW
-                // #define KEYP_3          KEY_PGDN
-                // #define KEYP_4          KEY_LEFTARROW
-                // #define KEYP_5          '5'
-                // #define KEYP_6          KEY_RIGHTARROW
-                // #define KEYP_7          KEY_HOME
-                // #define KEYP_8          KEY_UPARROW
-                // #define KEYP_9          KEY_PGUP
+                // TODO: keypad keys:
+                // => 0,           // 0
+                // => 0x80 + 0x4f, // 1, end
+                // => 0xaf,        // 2, down
+                // => 0x80 + 0x49, // 3, pg down
+                // => 0xac,        // 4, left
+                // => b'5',        // 5
+                // => 0xae,        // 6, right
+                // => 0x80 + 0x47, // 7, home
+                // => 0xad,        // 8, up
+                // => 0x80 + 0x51, // 9, pg up
 
-                // #define KEYP_DIVIDE     '/'
-                // #define KEYP_PLUS       '+'
-                // #define KEYP_MINUS      '-'
-                // #define KEYP_MULTIPLY   '*'
-                // #define KEYP_PERIOD     0
-                // #define KEYP_EQUALS     KEY_EQUALS
-                // #define KEYP_ENTER      KEY_ENTER
+                // => b'/', // divide
+                // => b'+', // plus
+                // => b'-', // minus
+                // => b'*', // mult
+                // => 0, // period
+                // => 0x3d, // equals
+                // => 13, // enter
                 _ => continue,
             };
 
-            RB.lock().as_mut().unwrap().push(Ev { key, pressed });
+            if let Err(err) = KEYS_SEND
+                .lock()
+                .as_mut()
+                .expect("input ringbuffer should be already set up")
+                .push(Ev { key, pressed })
+            {
+                eprintln!("input queue full, dropping {err:?}");
+            }
         }
-        eprintln!("READING STDIN FOR KEYS STOPPED");
-
-        // let mut stdin = STDIN.lock();
-
-        // stdin.read();
     });
 
     let mut fb = FB.lock();
@@ -190,7 +187,7 @@ extern "C" fn DG_DrawFrame() {
     const DOOMGENERIC_RESX: usize = 640;
     const DOOMGENERIC_RESY: usize = 400;
 
-    const PITCH: usize = DOOMGENERIC_RESX * mem::size_of::<u32>();
+    // const PITCH: usize = DOOMGENERIC_RESX * mem::size_of::<u32>();
     // const W: usize = DOOMGENERIC_RESX * mem::size_of::<u32>();
     // const H: usize = DOOMGENERIC_RESY * mem::size_of::<u32>();
 
@@ -207,7 +204,7 @@ extern "C" fn DG_DrawFrame() {
         for x in 0..DOOMGENERIC_RESX {
             let px = dg_buf[x + y * DOOMGENERIC_RESX];
             let c = Color::from_u32(px);
-            fb.fill(x + 100, y + 100, 1, 1, Color::new(c.b, c.g, c.r));
+            fb.fill(x * 2, y * 2, 2, 2, Color::new(c.b, c.g, c.r));
         }
         // let spot = y * fb.pitch;
         // let dg_buf_slot = y * DOOMGENERIC_RESX;
@@ -229,7 +226,13 @@ extern "C" fn DG_GetTicksMs() -> u32 {
 
 #[no_mangle]
 extern "C" fn DG_GetKey(_pressed: *mut ffi::c_int, _doom_key: *mut ffi::c_uchar) -> ffi::c_int {
-    if let Some(Ev { key, pressed }) = RB.lock().as_mut().unwrap().pop() {
+    if let Some(Ev { key, pressed }) = KEYS_RECV.lock().as_mut().unwrap().pop() {
+        if pressed == 1 {
+            eprintln!("{key} up");
+        } else {
+            eprintln!("{key} down");
+        }
+
         unsafe {
             *_pressed = pressed;
             *_doom_key = key;
@@ -271,6 +274,7 @@ fn framebuffer_info() -> Framebuffer<'static> {
     }
 }
 
+#[allow(unused)]
 #[derive(Debug)]
 struct Framebuffer<'a> {
     width: usize,
@@ -294,6 +298,11 @@ impl Framebuffer<'_> {
 //
 
 fn main() {
+    let (send, recv) = ringbuf::HeapRb::new(256).split();
+
+    *KEYS_SEND.lock() = Some(send);
+    *KEYS_RECV.lock() = Some(recv);
+
     _strncmp_test();
     _strncasecmp_test();
     _atoi_test();
