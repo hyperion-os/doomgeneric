@@ -3,7 +3,11 @@
 
 //
 
-use core::{ffi, mem, ptr, slice};
+use core::{
+    ffi,
+    ptr::{self, NonNull},
+    slice,
+};
 
 use alloc::string::String;
 use crossbeam::queue::SegQueue;
@@ -12,8 +16,9 @@ use libstd::{
     eprintln,
     fs::{File, OpenOptions, Stdin},
     io::BufReader,
+    process::ExitCode,
     sync::Mutex,
-    sys::{map_file, nanosleep, rename, timestamp, yield_now},
+    sys::{map_file, nanosleep, rename, timestamp, unmap_file, yield_now},
     thread::spawn,
 };
 
@@ -49,15 +54,48 @@ struct Ev {
 }
 
 static KEYS: SegQueue<Ev> = SegQueue::new();
+static FBO: Mutex<Option<(File, usize)>> = Mutex::new(None);
 
 //
 
 #[no_mangle]
-extern "C" fn DG_Init() {
+extern "C" fn DG_Init() {}
+
+#[no_mangle]
+pub extern "C" fn exit(status: ffi::c_int) -> ! {
+    eprintln!("EXIT {status}");
+
+    if let Some((fbo, fbo_mapped)) = FBO.lock().take() {
+        unmap_file(
+            fbo.as_desc(),
+            NonNull::new(fbo_mapped as *mut ()).unwrap(),
+            0,
+        )
+        .expect("failed to unmap the fb");
+    }
+
+    ExitCode::from_i32(status).exit_process()
+}
+
+fn lazy_init() {
+    if FBO.lock().is_some() {
+        return;
+    }
+
     spawn(|| {
         let mut stdin = BufReader::new(unsafe { File::new(Stdin::FD) });
         let mut buf = String::new();
-        while stdin.read_line(&mut buf).is_ok() {
+        loop {
+            buf.clear();
+            if stdin.read_line(&mut buf).is_err() {
+                continue;
+            }
+            if buf.is_empty() {
+                eprintln!("EMPTY");
+                panic!();
+            }
+            // eprintln!("{buf:?}");
+
             #[derive(Debug, serde::Serialize, serde::Deserialize)]
             struct KeyboardEventSer {
                 // pub scancode: u8,
@@ -69,11 +107,14 @@ extern "C" fn DG_Init() {
             let Ok(ev) = serde_json::from_str::<KeyboardEventSer>(&buf.trim()) else {
                 continue;
             };
-            buf.clear();
 
             let pressed = if ev.state == 0 { 1 } else { 0 };
 
             let key = match ev.keycode {
+                // 40 => 0xad, // W - up
+                // 61 => 0xa0, // A - strafe left
+                // 62 => 0xaf, // S - down
+                // 63 => 0xa1, // D - strafe right
                 103 => 0xae,      // right
                 101 => 0xac,      // left
                 88 => 0xad,       // up
@@ -140,7 +181,17 @@ extern "C" fn DG_Init() {
                 // => 0, // period
                 // => 0x3d, // equals
                 // => 13, // enter
-                _ => continue,
+                _ => {
+                    if let Some(c) = ev.unicode {
+                        if c.is_ascii() {
+                            c as _
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                }
             };
 
             KEYS.push(Ev { key, pressed });
@@ -166,13 +217,16 @@ extern "C" fn DG_Init() {
 
     *fb = info;
 
-    // unmap_file(fbo.as_desc(), fbo_mapped, 0).expect("failed to unmap the fb");
     // keep the file open
-    mem::forget(fbo);
+
+    let mut lock = FBO.lock();
+    *lock = Some((fbo, fbo_mapped.as_ptr() as usize));
 }
 
 #[no_mangle]
 extern "C" fn DG_DrawFrame() {
+    lazy_init();
+
     let mut fb = FB.lock();
 
     const DOOMGENERIC_RESX: usize = 640;
@@ -218,11 +272,11 @@ extern "C" fn DG_GetTicksMs() -> u32 {
 #[no_mangle]
 extern "C" fn DG_GetKey(_pressed: *mut ffi::c_int, _doom_key: *mut ffi::c_uchar) -> ffi::c_int {
     if let Some(Ev { key, pressed }) = KEYS.pop() {
-        if pressed == 1 {
-            eprintln!("{key} up");
-        } else {
-            eprintln!("{key} down");
-        }
+        // if pressed == 1 {
+        //     eprintln!("{key} up");
+        // } else {
+        //     eprintln!("{key} down");
+        // }
 
         unsafe {
             *_pressed = pressed;

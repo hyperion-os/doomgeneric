@@ -12,7 +12,6 @@ use libstd::{
     fs::{Dir, File, OpenOptions, Stderr, STDOUT},
     io::{Read, Write},
     print, println,
-    process::ExitCode,
     sync::Mutex,
     sys::err::Error,
 };
@@ -55,6 +54,8 @@ pub unsafe extern "C" fn fopen(filename: *const c_char, mode: *const c_char) -> 
     if mode.contains('x') {
         opts.create_new(true);
     }
+
+    eprintln!("fopen({path:?}, {:?})", opts);
 
     match opts.open(&path) {
         Ok(f) => Box::into_raw(Box::new(CFile {
@@ -484,11 +485,6 @@ pub extern "C" fn putchar(character: c_int) -> c_int {
     } else {
         1
     }
-}
-
-#[no_mangle]
-pub extern "C" fn exit(status: c_int) -> ! {
-    ExitCode::from_i32(status).exit_process()
 }
 
 #[no_mangle]
