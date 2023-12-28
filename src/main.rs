@@ -74,7 +74,7 @@ pub extern "C" fn exit(status: ffi::c_int) -> ! {
         .expect("failed to unmap the fb");
     }
 
-    ExitCode::from_i32(status).exit_process()
+    ExitCode::from_raw(status).exit_process()
 }
 
 fn lazy_init() {
