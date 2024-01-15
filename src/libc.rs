@@ -9,8 +9,8 @@ use core::{
 use alloc::{borrow::Cow, boxed::Box, format};
 use libstd::{
     eprintln,
-    fs::{Dir, File, OpenOptions, Stderr, STDOUT},
-    io::{Read, Write},
+    fs::{Dir, File, OpenOptions},
+    io::{stderr, stdout, Read, Stderr, Write, WriteExt},
     print, println,
     sync::Mutex,
     sys::err::Error,
@@ -167,9 +167,8 @@ pub extern "C" fn fread(
     //     }
     // }
 
-    let mut bytes_read = 0;
-    match file.read_exact(buf, &mut bytes_read) {
-        Ok(()) => {}
+    match file.read_exact(buf) {
+        Ok(()) => count,
         Err(err) => {
             match err {
                 _ => {
@@ -177,6 +176,7 @@ pub extern "C" fn fread(
                 }
             };
             unsafe { errno = err.0 as _ };
+            0
         }
     }
 
@@ -184,8 +184,6 @@ pub extern "C" fn fread(
     //     Ok(s) => eprintln!("`{s}`"),
     //     Err(e) => eprintln!("{}", from_utf8(&buf[..e.valid_up_to()]).unwrap()),
     // };
-
-    bytes_read / size
 }
 
 #[no_mangle]
@@ -204,9 +202,8 @@ pub extern "C" fn fwrite(
 
     let buf = unsafe { slice::from_raw_parts(ptr as *const u8, size * count) };
 
-    let mut bytes_written = 0;
-    match file.file.lock().write_exact(buf, &mut bytes_written) {
-        Ok(()) => {}
+    match file.file.lock().write_all(buf) {
+        Ok(()) => count,
         Err(err) => {
             match err {
                 _ => {
@@ -214,10 +211,9 @@ pub extern "C" fn fwrite(
                 }
             };
             unsafe { errno = err.0 as _ };
+            0
         }
     }
-
-    bytes_written / size
 }
 
 #[no_mangle]
@@ -225,7 +221,7 @@ pub unsafe extern "C" fn fclose(stream: *mut CFile) -> c_int {
     let file = unsafe { &*stream };
     // eprintln!("fclose syscall {:?}", file.path);
 
-    if stream as usize == stderr.0 as usize {
+    if stream as usize == STDERR.0 as usize {
         file.file.lock().close().unwrap();
         return 0;
     }
@@ -301,7 +297,7 @@ pub unsafe extern "C" fn vfprintf(
     let file = unsafe { &*stream };
     let mut file = file.file.lock();
 
-    printf_compat::format(format, args.as_va_list(), output::fmt_write(&mut *file))
+    printf_compat::format(format, args.as_va_list(), output::fmt_write(file.fmt()))
 }
 
 #[no_mangle]
@@ -439,10 +435,11 @@ pub extern "C" fn fabs(x: c_double) -> c_double {
 unsafe extern "C" fn printf(format: *const c_char, mut args: ...) -> c_int {
     // TODO: DIY this c formatting thing
 
-    let stdout = &mut *STDOUT.lock();
-    let res =
-        unsafe { printf_compat::format(format, args.as_va_list(), output::fmt_write(stdout)) };
-    libstd::io::Write::flush(stdout).unwrap();
+    let mut stdout = stdout().lock();
+    let res = unsafe {
+        printf_compat::format(format, args.as_va_list(), output::fmt_write(stdout.fmt()))
+    };
+    stdout.flush().unwrap();
 
     res
 
@@ -805,9 +802,9 @@ pub fn _strlen_test() {
 #[used]
 static mut errno: i32 = 0;
 
-#[no_mangle]
+#[export_name = "stderr"]
 #[used]
-static stderr: StaticCFile = {
+static STDERR: StaticCFile = {
     static STDERR_F: CFile = CFile {
         file: Mutex::new(unsafe { File::new(Stderr::FD) }),
         path: Cow::Borrowed("<stderr>"),

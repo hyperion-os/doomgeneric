@@ -14,8 +14,8 @@ use crossbeam::queue::SegQueue;
 use hyperion_color::Color;
 use libstd::{
     eprintln,
-    fs::{File, OpenOptions, Stdin},
-    io::BufReader,
+    fs::{File, OpenOptions},
+    io::{stdin, BufReader},
     process::ExitCode,
     sync::Mutex,
     sys::{map_file, nanosleep, rename, timestamp, unmap_file, yield_now},
@@ -74,7 +74,7 @@ pub extern "C" fn exit(status: ffi::c_int) -> ! {
         .expect("failed to unmap the fb");
     }
 
-    ExitCode::from_i32(status).exit_process()
+    ExitCode::from_raw(status).exit_process()
 }
 
 fn lazy_init() {
@@ -83,7 +83,7 @@ fn lazy_init() {
     }
 
     spawn(|| {
-        let mut stdin = BufReader::new(unsafe { File::new(Stdin::FD) });
+        let mut stdin = stdin().lock();
         let mut buf = String::new();
         loop {
             buf.clear();
