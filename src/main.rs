@@ -94,7 +94,7 @@ fn lazy_init() {
                 eprintln!("EMPTY");
                 panic!();
             }
-            // eprintln!("{buf:?}");
+            eprintln!("{buf:?}");
 
             #[derive(Debug, serde::Serialize, serde::Deserialize)]
             struct KeyboardEventSer {
@@ -138,6 +138,17 @@ fn lazy_init() {
                 10 => 0x80 + 0x44,
                 11 => 0x80 + 0x57,
                 12 => 0x80 + 0x58,
+
+                17 => b'0',
+                18 => b'1',
+                19 => b'2',
+                20 => b'3',
+                21 => b'4',
+                22 => b'5',
+                23 => b'6',
+                24 => b'7',
+                25 => b'8',
+                26 => b'9',
 
                 30 => 0x7f, // backspace
                 34 => 0xff, // pause
