@@ -14,10 +14,6 @@
         pkgs = import nixpkgs {
           inherit system overlays;
         };
-        rustPlatform = pkgs.makeRustPlatform {
-          cargo = pkgs.rust-bin.nightly.latest.default;
-          rustc = pkgs.rust-bin.nightly.latest.default;
-        };
       in
       {
         # `nix develop`
@@ -25,10 +21,6 @@
           buildInputs = with pkgs; [
             pkg-config
             openssl
-            (rust-bin.nightly.latest.default.override {
-              extensions = [ "rust-src" ];
-              targets = [ "x86_64-unknown-none" ];
-            })
             rust-analyzer
             rustup
             lldb

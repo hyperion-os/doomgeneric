@@ -10,7 +10,7 @@ use alloc::{borrow::Cow, boxed::Box, format};
 use libstd::{
     eprintln,
     fs::{Dir, File, OpenOptions},
-    io::{stderr, stdout, Read, Stderr, Write, WriteExt},
+    io::{stdout, Read, Stderr, Write, WriteExt},
     print, println,
     sync::Mutex,
     sys::err::Error,
