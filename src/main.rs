@@ -44,7 +44,7 @@ static FB: Mutex<Framebuffer> = Mutex::new(Framebuffer {
     width: 0,
     height: 0,
     pitch: 0,
-    buf: &mut [],
+    buf: None,
 });
 
 #[derive(Debug)]
@@ -224,7 +224,7 @@ fn lazy_init() {
     let buf = unsafe { slice::from_raw_parts_mut(fbo_mapped.as_ptr() as *mut u8, meta.len) };
     // let mut backbuf = Vec::leak(vec![0u8; buf.len()]);
     // info.buf = backbuf;
-    info.buf = buf;
+    info.buf = Some(buf);
 
     *fb = info;
 
@@ -326,7 +326,7 @@ fn framebuffer_info() -> Framebuffer<'static> {
         width,
         height,
         pitch,
-        buf: &mut [],
+        buf: None,
     }
 }
 
@@ -336,14 +336,14 @@ struct Framebuffer<'a> {
     width: usize,
     height: usize,
     pitch: usize,
-    buf: &'a mut [u8],
+    buf: Option<&'a mut [u8]>,
 }
 
 impl Framebuffer<'_> {
     fn fill(&mut self, x: usize, y: usize, w: usize, h: usize, color: Color) {
         for yd in y..y + h {
             let spot = x * 4 + yd * self.pitch;
-            self.buf[spot..spot + 4 * w]
+            self.buf.as_mut().unwrap()[spot..spot + 4 * w]
                 .as_chunks_mut::<4>()
                 .0
                 .fill(color.as_arr());
