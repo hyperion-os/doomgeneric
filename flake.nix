@@ -29,6 +29,8 @@
             cargo-expand
             cargo-make
             coreboot-toolchain.x64
+            lld_16
+            clang_16
           ];
         };
       }

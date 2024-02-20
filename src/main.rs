@@ -3,19 +3,17 @@
 
 //
 
-use core::{
-    ffi,
-    ptr::{self, NonNull},
-    slice,
-};
+use core::{ffi, ptr::NonNull, slice};
 
-use alloc::string::String;
+use alloc::{ffi::CString, string::String, vec::Vec};
 use crossbeam::queue::SegQueue;
 use hyperion_color::Color;
 use libstd::{
+    env::args,
     eprintln,
     fs::{File, OpenOptions},
     io::{stdin, BufReader},
+    println,
     process::ExitCode,
     sync::Mutex,
     sys::{map_file, nanosleep, rename, timestamp, unmap_file, yield_now},
@@ -361,8 +359,17 @@ fn main() {
 
     // println!("doomgeneric_Create");
 
+    let argv = args()
+        .map(|a| CString::new(a).unwrap())
+        .collect::<Vec<CString>>();
+    let c_argv = argv.iter().map(|s| s.as_ptr()).collect::<Vec<*const i8>>();
+    let c_argv = c_argv.as_ptr();
+    let c_argc = argv.len();
+
+    println!("argv: {argv:?}");
+
     unsafe {
-        doomgeneric_Create(0, ptr::null());
+        doomgeneric_Create(c_argc as i32, c_argv);
     }
 
     // println!("doomgeneric_Tick");

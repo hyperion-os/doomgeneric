@@ -21,26 +21,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed570934406eb16438a4e976b1b4500774099c13b8cb96eec99f620f05090ddf"
 
 [[package]]
-name = "bytemuck"
-version = "1.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed2490600f404f2b94c167e31d3ed1d5f3c225a0f3b80230053b3e0b7b962bd9"
-dependencies = [
- "bytemuck_derive",
-]
-
-[[package]]
-name = "bytemuck_derive"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "965ab7eb5f8f97d2a083c799f3a1b994fc397b2fe2da5d1da1626ce15a39f2b1"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "cc"
 version = "1.0.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -122,20 +102,15 @@ checksum = "a26ae43d7bcc3b814de94796a5e736d4029efb0ee900c12e2d54c993ad1a1e07"
 
 [[package]]
 name = "hyperion-color"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "hyperion-slab-alloc"
-version = "0.2.0"
-dependencies = [
- "bytemuck",
- "lock_api",
- "spin",
-]
+version = "0.3.0"
 
 [[package]]
 name = "hyperion-syscall"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bitflags 2.4.2",
 ]
@@ -169,7 +144,7 @@ checksum = "4ec2a862134d2a7d32d7983ddcdd1c4923530833c9f2ea1a44fc5fa473989058"
 
 [[package]]
 name = "libstd"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hyperion-slab-alloc",
  "hyperion-syscall",
