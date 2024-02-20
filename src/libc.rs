@@ -610,8 +610,18 @@ pub unsafe extern "C" fn strchr(str: *const c_char, character: c_int) -> *const 
 }
 
 #[no_mangle]
-pub extern "C" fn strrchr() {
-    unimplemented!()
+pub unsafe extern "C" fn strrchr(str: *const c_char, character: c_int) -> *const c_char {
+    unsafe { c_str_iter(str) }
+        .enumerate()
+        .find_map(|(i, ch)| {
+            if ch as c_int == character {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .map(|found_offs| unsafe { str.add(found_offs) })
+        .unwrap_or(ptr::null())
 }
 
 #[no_mangle]
