@@ -108,19 +108,21 @@ fn lazy_init() {
 
             let pressed = if ev.state == 0 { 1 } else { 0 };
 
+            // libstd::sys::log!("{:x}:", ev.keycode);
+
             let key = match ev.keycode {
                 // 40 => 0xad, // W - up
                 // 61 => 0xa0, // A - strafe left
                 // 62 => 0xaf, // S - down
                 // 63 => 0xa1, // D - strafe right
-                103 => 0xae,      // right
-                101 => 0xac,      // left
-                88 => 0xad,       // up
-                102 => 0xaf,      // down
-                84 => 0xa0,       // comma - strafe left
-                85 => 0xa1,       // period - strafe right
-                96 => 0xa2,       // space - use
-                93 => 0xa3,       // lctrl - fire
+                103 => 0xae, // right
+                101 => 0xac, // left
+                88 => 0xad,  // up
+                102 => 0xaf, // down
+                84 => 0xa0,  // comma - strafe left
+                85 => 0xa1,  // period - strafe right
+                96 => 0xa2,  // space - use
+                // 93 => 0xa3,       // lctrl - fire
                 0 => 27,          // escape
                 72 => 13,         // enter
                 38 => 9,          // tab
@@ -154,8 +156,9 @@ fn lazy_init() {
                 29 => 0x3d, // equals
                 28 => 0x2d, // minus
 
-                // => 0x80+0x36, // rshift, idk, mine doesnt work
-                100 => 0x80 + 0x1d,     // rctrl
+                76 | 87 => 0x80 + 0x36, // r/lshift
+                // 100 => 0x80 + 0x1d,     // rctrl
+                93 | 100 => 0xa3,       // r/lctrl
                 95 | 97 => 0x80 + 0x38, // r/l alt
 
                 60 => 0x80 + 0x3a, // capslock
@@ -202,6 +205,8 @@ fn lazy_init() {
                     }
                 }
             };
+
+            // libstd::sys::log!("{:x} -> {:x}", ev.keycode, key);
 
             KEYS.push(Ev { key, pressed });
         }
