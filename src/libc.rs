@@ -6,11 +6,11 @@ use core::{
     str::from_utf8,
 };
 
-use alloc::{borrow::Cow, boxed::Box, format};
+use alloc::{borrow::Cow, boxed::Box};
 use libstd::{
     eprintln,
     fs::{Dir, File, OpenOptions},
-    io::{stdout, Read, Stderr, Write, WriteExt},
+    io::{stdout, BufWriter, Read, Stderr, Write, WriteExt},
     print, println,
     sync::Mutex,
     sys::err::Error,
@@ -19,9 +19,8 @@ use printf_compat::output;
 
 //
 
-#[derive(Debug)]
 pub struct CFile {
-    file: Mutex<File>,
+    file: Mutex<BufWriter<File>>,
     path: Cow<'static, str>,
 }
 
@@ -38,13 +37,14 @@ pub unsafe extern "C" fn fopen(filename: *const c_char, mode: *const c_char) -> 
         return null_mut();
     };
 
-    let path = format!("/{path}");
+    // let path = format!("/{path}");
     // eprintln!("open file {path} as {mode}");
 
     let mut opts = OpenOptions::new();
     if mode.contains('w') {
         opts.write(true);
         opts.create(true);
+        opts.create_dirs(true);
         // opts.append(false);
         opts.truncate(true);
     }
@@ -59,7 +59,7 @@ pub unsafe extern "C" fn fopen(filename: *const c_char, mode: *const c_char) -> 
 
     match opts.open(&path) {
         Ok(f) => Box::into_raw(Box::new(CFile {
-            file: Mutex::new(f),
+            file: Mutex::new(BufWriter::new(f)),
             path: path.into(),
         })),
         Err(err) => {
@@ -85,7 +85,7 @@ pub unsafe extern "C" fn fopen(filename: *const c_char, mode: *const c_char) -> 
 pub extern "C" fn ftell(stream: *const CFile) -> c_long {
     let file = unsafe { &*stream };
 
-    match file.file.lock().metadata() {
+    match file.file.lock().get_ref().metadata() {
         Ok(meta) => {
             eprintln!("ftell syscall {:?} ({})", file.path, meta.position);
             meta.position as _
@@ -103,9 +103,15 @@ pub extern "C" fn ftell(stream: *const CFile) -> c_long {
 }
 
 #[no_mangle]
-pub extern "C" fn fflush(_stream: *const CFile) -> c_int {
-    // files are not buffered by default
-    0
+pub extern "C" fn fflush(stream: *const CFile) -> c_int {
+    let file = unsafe { &*stream };
+
+    if let Err(err) = file.file.lock().flush() {
+        unsafe { errno = err.0 as _ };
+        -1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
@@ -113,7 +119,11 @@ pub extern "C" fn fseek(stream: *const CFile, offset: c_long, origin: c_int) -> 
     let file = unsafe { &*stream };
     // eprintln!("fseek syscall {:?} ({offset}, {origin})", file.path);
 
-    if let Err(err) = libstd::sys::seek(file.file.lock().as_desc(), offset as _, origin as _) {
+    if let Err(err) = libstd::sys::seek(
+        file.file.lock().get_ref().as_desc(),
+        offset as _,
+        origin as _,
+    ) {
         match err {
             _ => {
                 eprintln!("FIXME: fseek map error {} {offset} {origin}", err.as_str());
@@ -167,7 +177,7 @@ pub extern "C" fn fread(
     //     }
     // }
 
-    match file.read_exact(buf) {
+    match file.get_mut().read_exact(buf) {
         Ok(()) => count,
         Err(err) => {
             match err {
@@ -198,11 +208,10 @@ pub extern "C" fn fwrite(
     }
 
     let file = unsafe { &*stream };
-    // eprintln!("fwrite syscall {:?}", file.path);
 
     let buf = unsafe { slice::from_raw_parts(ptr as *const u8, size * count) };
-
-    match file.file.lock().write_all(buf) {
+    let res = file.file.lock().write_all(buf);
+    match res {
         Ok(()) => count,
         Err(err) => {
             match err {
@@ -218,15 +227,15 @@ pub extern "C" fn fwrite(
 
 #[no_mangle]
 pub unsafe extern "C" fn fclose(stream: *mut CFile) -> c_int {
-    let file = unsafe { &*stream };
+    // let file = unsafe { &*stream };
     // eprintln!("fclose syscall {:?}", file.path);
 
     if stream as usize == STDERR.0 as usize {
-        file.file.lock().close().unwrap();
         return 0;
     }
 
     let file = unsafe { Box::from_raw(stream) }; // drop the File
+    _ = file.file.lock().flush();
     drop(file);
 
     0
@@ -272,7 +281,7 @@ pub unsafe extern "C" fn putc(_character: c_int, _stream: *const CFile) -> c_int
 
 #[no_mangle]
 pub extern "C" fn remove() {
-    unimplemented!()
+    libstd::sys::log!("TODO: remove syscall");
 }
 
 #[no_mangle]
@@ -301,8 +310,12 @@ pub unsafe extern "C" fn vfprintf(
 }
 
 #[no_mangle]
-pub extern "C" fn rename() {
-    unimplemented!()
+pub extern "C" fn rename(oldname: *const c_char, newname: *const c_char) -> c_int {
+    let oldname = unsafe { as_rust_str(oldname) }.unwrap_or("");
+    let newname = unsafe { as_rust_str(newname) }.unwrap_or("");
+    libstd::sys::system("/bin/cp", &[oldname, newname]);
+    libstd::sys::log!("FIXME: rename");
+    0
 }
 
 #[no_mangle]
@@ -816,7 +829,7 @@ static mut errno: i32 = 0;
 #[used]
 static STDERR: StaticCFile = {
     static STDERR_F: CFile = CFile {
-        file: Mutex::new(unsafe { File::new(Stderr::FD) }),
+        file: Mutex::new(BufWriter::new(unsafe { File::new(Stderr::FD) })),
         path: Cow::Borrowed("<stderr>"),
     };
 
