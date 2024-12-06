@@ -1,5 +1,5 @@
 #![no_std]
-#![feature(c_variadic, c_size_t, new_uninit, slice_as_chunks, const_mut_refs)]
+#![feature(c_variadic, c_size_t, slice_as_chunks)]
 
 //
 
@@ -38,6 +38,13 @@ extern "C" {
 
 //
 
+const DOOMGENERIC_RESX: usize = 640;
+const DOOMGENERIC_RESY: usize = 400;
+
+// const PITCH: usize = DOOMGENERIC_RESX * mem::size_of::<u32>();
+// const W: usize = DOOMGENERIC_RESX * mem::size_of::<u32>();
+// const H: usize = DOOMGENERIC_RESY * mem::size_of::<u32>();
+
 static FB: Mutex<Framebuffer> = Mutex::new(Framebuffer {
     width: 0,
     height: 0,
@@ -61,7 +68,10 @@ extern "C" fn DG_Init() {}
 
 #[no_mangle]
 pub extern "C" fn exit(status: ffi::c_int) -> ! {
-    eprintln!("EXIT {status}");
+    let mut fb = FB.lock();
+    let (w, h) = (fb.width, fb.height);
+    fb.fill(0, 0, w, h, Color::BLACK);
+    drop(fb);
 
     if let Some((fbo, fbo_mapped)) = FBO.lock().take() {
         unmap_file(
@@ -242,13 +252,6 @@ extern "C" fn DG_DrawFrame() {
     lazy_init();
 
     let mut fb = FB.lock();
-
-    const DOOMGENERIC_RESX: usize = 640;
-    const DOOMGENERIC_RESY: usize = 400;
-
-    // const PITCH: usize = DOOMGENERIC_RESX * mem::size_of::<u32>();
-    // const W: usize = DOOMGENERIC_RESX * mem::size_of::<u32>();
-    // const H: usize = DOOMGENERIC_RESY * mem::size_of::<u32>();
 
     extern "C" {
         static DG_ScreenBuffer: *mut u32;
