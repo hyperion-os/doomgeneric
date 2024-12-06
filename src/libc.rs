@@ -210,7 +210,7 @@ pub extern "C" fn fwrite(
     let file = unsafe { &*stream };
 
     let buf = unsafe { slice::from_raw_parts(ptr as *const u8, size * count) };
-    let res = file.file.lock().write_all(buf);
+    let res = file.file.lock().get_mut().write_all(buf);
     match res {
         Ok(()) => count,
         Err(err) => {
