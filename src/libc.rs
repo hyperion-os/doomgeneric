@@ -85,6 +85,10 @@ pub unsafe extern "C" fn fopen(filename: *const c_char, mode: *const c_char) -> 
 pub extern "C" fn ftell(stream: *const CFile) -> c_long {
     let file = unsafe { &*stream };
 
+    if let Err(err) = file.file.lock().flush() {
+        unsafe { errno = err.0 as _ };
+    }
+
     match file.file.lock().get_ref().metadata() {
         Ok(meta) => {
             eprintln!("ftell syscall {:?} ({})", file.path, meta.position);
@@ -119,15 +123,20 @@ pub extern "C" fn fseek(stream: *const CFile, offset: c_long, origin: c_int) -> 
     let file = unsafe { &*stream };
     // eprintln!("fseek syscall {:?} ({offset}, {origin})", file.path);
 
+    if let Err(err) = file.file.lock().flush() {
+        match err {
+            _ => eprintln!("FIXME: fseek map error {} {offset} {origin}", err.as_str()),
+        };
+        unsafe { errno = err.0 as _ };
+    }
+
     if let Err(err) = libstd::sys::seek(
         file.file.lock().get_ref().as_desc(),
         offset as _,
         origin as _,
     ) {
         match err {
-            _ => {
-                eprintln!("FIXME: fseek map error {} {offset} {origin}", err.as_str());
-            }
+            _ => eprintln!("FIXME: fseek map error {} {offset} {origin}", err.as_str()),
         };
         unsafe { errno = err.0 as _ };
         1
@@ -210,7 +219,7 @@ pub extern "C" fn fwrite(
     let file = unsafe { &*stream };
 
     let buf = unsafe { slice::from_raw_parts(ptr as *const u8, size * count) };
-    let res = file.file.lock().get_mut().write_all(buf);
+    let res = file.file.lock().write_all(buf);
     match res {
         Ok(()) => count,
         Err(err) => {
